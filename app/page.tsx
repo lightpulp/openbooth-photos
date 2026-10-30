@@ -1,69 +1,126 @@
-import Image from "next/image";
+"use client";
+import jsQR from "jsqr";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import Shell from "@/components/Shell";
+import { parseShareLink } from "@/lib/parse";
+
+const btn =
+  "rounded-full border-[5px] border-[#5C0F14] bg-[#F7E018] px-8 py-3 text-xl font-black text-[#5C0F14] shadow-[0_6px_0_#5C0F14] active:translate-y-1 active:shadow-[0_2px_0_#5C0F14]";
 
 export default function Home() {
+  const router = useRouter();
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const video = useRef<HTMLVideoElement>(null);
+
+  function open(raw: string): boolean {
+    const found = parseShareLink(raw);
+    if (!found) {
+      setError("That doesn't look like a photobooth QR code or link.");
+      return false;
+    }
+    router.push(`/p/${found.sid}#${found.token}`);
+    return true;
+  }
+
+  // Live camera scan (jsQR works on every phone, unlike the BarcodeDetector API)
+  useEffect(() => {
+    if (!scanning) return;
+    let stop = false, raf = 0;
+    let stream: MediaStream | undefined;
+    const canvas = document.createElement("canvas");
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        const v = video.current!;
+        v.srcObject = stream;
+        await v.play();
+        const tick = () => {
+          if (stop) return;
+          if (v.videoWidth) {
+            const scale = Math.min(1, 640 / v.videoWidth);
+            canvas.width = v.videoWidth * scale;
+            canvas.height = v.videoHeight * scale;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+            ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(img.data, img.width, img.height);
+            if (code && open(code.data)) {
+              setScanning(false);
+              return;
+            }
+          }
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      } catch {
+        setError("Couldn't open the camera. Allow camera access, or upload a screenshot of your QR code instead.");
+        setScanning(false);
+      }
+    })();
+    return () => {
+      stop = true;
+      cancelAnimationFrame(raf);
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning]);
+
+  // QR code saved as a picture / screenshot
+  async function onFile(file?: File) {
+    if (!file) return;
+    setError("");
+    try {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, 1200 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * scale);
+      c.height = Math.round(bmp.height * scale);
+      const ctx = c.getContext("2d")!;
+      ctx.drawImage(bmp, 0, 0, c.width, c.height);
+      const img = ctx.getImageData(0, 0, c.width, c.height);
+      const code = jsQR(img.data, img.width, img.height);
+      if (!code) setError("No QR code found in that picture. Try a clearer screenshot.");
+      else open(code.data);
+    } catch {
+      setError("Couldn't read that image.");
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <Shell>
+      <p className="text-lg font-bold">Lost the booth Wi-Fi? Scan your old QR code here to get your photos back.</p>
+
+      {scanning ? (
+        <div className="w-full space-y-3">
+          <video ref={video} playsInline muted className="w-full rounded-2xl border-[6px] border-[#F7E018]" />
+          <button className={btn} onClick={() => setScanning(false)}>Cancel</button>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      ) : (
+        <div className="flex w-full flex-col items-center gap-4">
+          <button className={btn} onClick={() => { setError(""); setScanning(true); }}>Scan my QR code</button>
+          <label className={`${btn} cursor-pointer bg-[#FFF6D9]`}>
+            Upload a QR screenshot
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+          </label>
+          <div className="w-full">
+            <p className="mb-2 text-sm text-[#ffd9d9]">…or paste the link under your old QR code</p>
+            <div className="flex gap-2">
+              <input
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="http://…/dl/20261029_ab12cd34/…"
+                className="min-w-0 flex-1 rounded-full border-4 border-[#5C0F14] px-4 py-2 text-[#5C0F14]"
+              />
+              <button className="rounded-full border-4 border-[#5C0F14] bg-[#F7E018] px-5 font-black text-[#5C0F14]" onClick={() => open(text)}>Go</button>
+            </div>
+          </div>
         </div>
-      </main>
-    </div>
+      )}
+
+      {error && <p className="rounded-xl bg-[#5C0F14] px-4 py-2 font-bold">{error}</p>}
+    </Shell>
   );
 }
